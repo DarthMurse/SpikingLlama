@@ -1,0 +1,14 @@
+torch>=2.1.0dev
+datasets
+transformers
+einops
+ninja
+lightning
+lightning[app]
+jsonargparse[signatures]  # CLI
+pandas
+pyarrow
+tokenizers
+sentencepiece
+wandb
+zstd
