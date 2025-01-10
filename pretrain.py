@@ -36,12 +36,12 @@ name = "spike-llama-120M"
 out_dir = Path("out") / name
 
 # Hyperparameters
-GPU_NUM = 1
+GPU_NUM = 7
 num_of_devices = GPU_NUM
-micro_batch_size = 64
+micro_batch_size = 16
 global_batch_size = GPU_NUM * micro_batch_size * 1  # global_batch_size = GPU_NUM * micro_batch_size * gradient_accumulation_steps
 learning_rate = 4e-4
-max_step = 80000 * 6
+max_step = 200000
 warmup_steps = 2000
 log_step_interval = 10
 eval_iters = 100

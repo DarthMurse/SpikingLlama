@@ -18,7 +18,7 @@ class ApplyRotaryEmb(torch.autograd.Function):
         rotary_dim must be <= headdim
         Apply rotary embedding to the first rotary_dim of x.
         """
-        batch, seqlen, nheads, headdim = x.shape
+        t, batch, seqlen, nheads, headdim = x.shape
         rotary_seqlen, rotary_dim = cos.shape
         rotary_dim *= 2
         assert rotary_dim <= headdim
@@ -57,7 +57,7 @@ class ApplyRotaryEmb(torch.autograd.Function):
     @staticmethod
     def backward(ctx, do):
         cos, sin = ctx.saved_tensors
-        _, seqlen, _, headdim = do.shape
+        _, _, seqlen, _, headdim = do.shape
         rotary_dim = cos.shape[-1]
         rotary_dim *= 2
         inplace = ctx.inplace

@@ -70,25 +70,22 @@ def act_heaveside(scale):
     # Surrogate function f(x) = aH(x-b) = 2 / pi * a * arctan((x-b)*scale)
     class _uq(torch.autograd.Function):
         @staticmethod
-        def forward(ctx, x, alpha, beta):
-            y = x - beta
-            positive = (y > 0).float()
+        def forward(ctx, x, alpha):
+            positive = (x > 0).float()
             if not alpha.initialized:
                 alpha.initialize_wrapper(x)
             out = alpha * positive
-            ctx.save_for_backward(y, alpha)
+            ctx.save_for_backward(x, alpha)
             return out.to(x.dtype)
 
         @staticmethod
         def backward(ctx, grad_output):
             grad_input = grad_output.clone()
             y, alpha = ctx.saved_tensors
-            alpha_d = 1 / pi * torch.arctan(y) + 1 / 2
-            grad_alpha = alpha_d * grad_input
-            arctan_d = 1 / pi * scale / ((scale * y) ** 2 + 1)
-            grad_beta = -alpha * arctan_d * grad_input
-            grad_input = alpha * arctan_d * grad_input
-            return grad_input.to(grad_output.dtype), grad_alpha.to(grad_output.dtype), grad_beta.to(grad_output.dtype)
+            grad_alpha = (y * grad_input).sum()
+            arctan_d = torch.where(y.abs() < alpha / 2, 1, 0)
+            grad_input = arctan_d * grad_input
+            return grad_input.to(grad_output.dtype), grad_alpha.to(grad_output.dtype)
 
     return _uq().apply
 
@@ -105,19 +102,26 @@ class AlphaInit(nn.Parameter):
         self.initialized = True
 
     def initialize_wrapper(self, tensor): 
-        size = len(self.data)
-        init_val = 4 * tensor.abs().view(-1, size).mean(dim=0)
+        init_val = 4 * tensor.abs().mean()
         self._initialize(init_val)
 
 class ParamHeaveside(nn.Module):
     def __init__(self, size):
         super().__init__()
-        self.zero_point = torch.nn.Parameter(torch.zeros([size]))
-        self.embed_scale = AlphaInit(torch.ones([size]))
-        self.heaveside = act_heaveside(4.0)
+        self.T = 4
+        self.acts = nn.ParameterList([AlphaInit(torch.tensor(1.0)) for _ in range(self.T)])
+        self.func = act_heaveside(4.0)
 
     def forward(self, x):
-        y = self.heaveside(x, self.embed_scale, self.zero_point)
+        output = []
+        for i in range(self.T):
+            if i == 0:
+                mem = x[i]
+            else:
+                mem = 0.25 * mem_old * (1 - output[i-1].detach() / self.acts[i-1].detach()) + x[i]
+            output.append(self.func(mem, self.acts[i]))
+            mem_old = mem.clone()
+        y = torch.stack(output)
         return y
 
 class NormedLinear(nn.Linear):
@@ -135,6 +139,7 @@ class QuantGPT(nn.Module):
         super().__init__()
         assert config.padded_vocab_size is not None
         self.config = config
+        self.T = 4
 
         self.lm_head = nn.Linear(config.n_embd, config.padded_vocab_size, bias=False)
         mlist = nn.ModuleList([Block(config) for _ in range(config.n_layer)])
@@ -213,7 +218,7 @@ class QuantGPT(nn.Module):
 
         # forward the model itself
         x = self.transformer.wte(idx)  # token embeddings of shape (b, t, n_embd)
-        loss = 0
+        x = x.repeat(tuple([self.T] + torch.ones(len(x.size()), dtype=int).tolist())) # T B S D
         if not use_kv_cache:
             for i in range(self.config.n_layer):
                 x, *_ = self.transformer.h[i](x, (cos, sin), max_seq_length)
@@ -223,6 +228,7 @@ class QuantGPT(nn.Module):
             for i in range(self.config.n_layer):
                 x, self.kv_caches[i] = self.transformer.h[i](x, (cos, sin), max_seq_length, mask, input_pos, self.kv_caches[i])
 
+        x = x.mean(dim=0)
         x = self.transformer.ln_f(x)
 
         return self.lm_head(x)  # (b, t, vocab_size)
@@ -335,7 +341,7 @@ class CausalSelfAttention(nn.Module):
         input_pos: Optional[torch.Tensor] = None,
         kv_cache: Optional[KVCache] = None,
     ) -> Tuple[torch.Tensor, Optional[KVCache]]:
-        B, T, C = x.size()  # batch size, sequence length, embedding dimensionality (n_embd)
+        t, B, T, C = x.size()  # batch size, sequence length, embedding dimensionality (n_embd)
 
         x = self.encoder_input(x)
         qkv = self.attn(x)
@@ -343,7 +349,7 @@ class CausalSelfAttention(nn.Module):
         # assemble into a number of query groups to support MHA, MQA and GQA together (see `config.n_query_groups`)
         q_per_kv = self.config.n_head // self.config.n_query_groups
         total_qkv = q_per_kv + 2  # each group has 1+ queries, 1 key, and 1 value
-        qkv = qkv.view(B, T, self.config.n_query_groups, total_qkv, self.config.head_size) # (B, T, n_query_groups, total_qkv, hs)
+        qkv = qkv.view(t, B, T, self.config.n_query_groups, total_qkv, self.config.head_size) # (B, T, n_query_groups, total_qkv, hs)
         # qkv = qkv.permute(0, 2, 3, 1, 4)  # (B, n_query_groups, total_qkv, T, hs)
 
         # split batched computation into three
@@ -356,11 +362,11 @@ class CausalSelfAttention(nn.Module):
         #     k = k.expand(B, self.config.n_query_groups, q_per_kv, T, self.config.head_size)
         #     v = v.expand(B, self.config.n_query_groups, q_per_kv, T, self.config.head_size)
 
-        q = q.reshape(B,  T, -1, self.config.head_size)  # (B, T, nh_q, hs)
-        k = k.reshape(B,  T, -1, self.config.head_size)
+        q = q.reshape(t, B,  T, -1, self.config.head_size)  # (B, T, nh_q, hs)
+        k = k.reshape(t, B,  T, -1, self.config.head_size)
         #v = v.reshape(B, T, -1)
         #v = self.encoder2(v)
-        v = v.reshape(B, T, -1, self.config.head_size)
+        v = v.reshape(t, B, T, -1, self.config.head_size)
 
         cos, sin = rope
 
@@ -395,7 +401,7 @@ class CausalSelfAttention(nn.Module):
 
         y = self.scaled_dot_product_attention(q, k, v, mask=mask)
 
-        y = y.reshape(B, T, C)  # re-assemble all head outputs side by side
+        y = y.reshape(t, B, T, C)  # re-assemble all head outputs side by side
 
         # output projection
         y = self.encoder_output(y)
@@ -418,13 +424,13 @@ class CausalSelfAttention(nn.Module):
 
             return flash_attn_func(q, k, v, dropout_p=0.0, softmax_scale=scale, causal=True)
         '''
-        q = q.transpose(1, 2)
-        k = k.transpose(1, 2)
-        v = v.transpose(1, 2)
+        q = q.transpose(3, 2)
+        k = k.transpose(3, 2)
+        v = v.transpose(3, 2)
 
         if q.size() != k.size():
-             k = k.repeat_interleave(q.shape[1]//k.shape[1], dim=1)
-             v = v.repeat_interleave(q.shape[1]//v.shape[1], dim=1)
+             k = k.repeat_interleave(q.shape[2]//k.shape[2], dim=2)
+             v = v.repeat_interleave(q.shape[2]//v.shape[2], dim=2)
 
         L, S = q.size(-2), k.size(-2)
         scale_factor = 1 / math.sqrt(q.size(-1)) if scale is None else scale
@@ -442,8 +448,8 @@ class CausalSelfAttention(nn.Module):
         
         attn_weight = F.relu(attn_weight + attn_bias)
         attn_weight = torch.dropout(attn_weight, 0.0, train=True)
-        y = attn_weight @ v # [B, H, S, D_H]
-        return y.transpose(1, 2)
+        y = attn_weight @ v # [T, B, H, S, D_H]
+        return y.transpose(3, 2)
 
 class GptNeoxMLP(nn.Module):
     def __init__(self, config: Config) -> None:
