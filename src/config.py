@@ -269,7 +269,7 @@ tiny_LLaMA = [
     dict(
         org="StatNLP-research",
         name="tiny_LLaMA_120M",
-        block_size=2048,
+        block_size=1024,
         vocab_size=32000,
         padding_multiple=64,
         n_layer=12,
@@ -280,7 +280,7 @@ tiny_LLaMA = [
         bias=False,
         _norm_class="FusedRMSNorm",
         norm_eps=1e-5,
-        _mlp_class="LLaMAMLP",
+        _mlp_class="GptNeoxMLP",
         intermediate_size=2048,
         n_query_groups=1,
     ),
