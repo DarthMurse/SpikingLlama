@@ -56,7 +56,7 @@ class SpikeLlamaWrapper(HFLM):
     AUTO_MODEL_CLASS = transformers.AutoModelForCausalLM
 
     # change you checkpoint path here (pretrained)
-    def __init__(self, pretrained="out/spike-llama-120M/iter-280000-ckpt.pth", max_length=512, batch_size=None, device="cuda",
+    def __init__(self, pretrained="out/264.pth", max_length=512, batch_size=None, device="cuda",
                  dtype=torch.float32):
         LM.__init__(self)
         self._model = SpikeGPTFull(pretrained).to(device=device, dtype=dtype)

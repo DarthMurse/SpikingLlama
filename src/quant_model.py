@@ -55,12 +55,13 @@ class QuantReLU(nn.ReLU):
         self.bit = bit
         self.dim = dim
         self.act_alq = act_quantization(self.bit)
-        self.act_alpha = torch.nn.Parameter(torch.tensor(6.0))
+        #self.act_alpha = torch.nn.Parameter(torch.tensor(6.0))
 
     def forward(self, x):
         #'''
         x = F.relu(x)
-        return self.act_alq(x, self.act_alpha)
+        return x
+        #return self.act_alq(x, self.act_alpha)
         '''
         return quant_relu(x, self.act_alpha.to(x.dtype), self.bit)
         '''
@@ -93,22 +94,18 @@ class SimpleParamHeaveside(nn.Module):
     def __init__(self, size, token, normed=False):
         super().__init__()
         self.normed = normed
-        self.zero_point = torch.nn.Parameter(torch.zeros([size]))
-        self.embed_scale = torch.nn.Parameter(torch.ones([size]))
+        #self.zero_point = torch.nn.Parameter(torch.zeros([size]))
+        #self.embed_scale = torch.nn.Parameter(torch.ones([size]))
         #A = torch.arange(token)
         #A = torch.exp(A/token - 1)
         #self.token_scale = torch.nn.Parameter(A)
         #self.embed_bias = torch.nn.Parameter(torch.zeros([size]))
         #self.token_bias = torch.nn.Parameter(torch.zeros([token]))
-        self.heaveside = act_heaveside(4.0)
+        #self.heaveside = act_heaveside(4.0)
 
     def forward(self, x):
-        if self.normed:
-            shape = x.shape
-            x = x.flatten(end_dim=-2)
-            x = (x - x.mean(dim=0)) / (x.std(dim=0) + 1e-5)
-            x = x.reshape(*shape)
-        x1 = self.heaveside(x, self.embed_scale, self.zero_point)
+        #x1 = self.heaveside(x, self.embed_scale, self.zero_point)
+        x1 = x
         return x1
 
 class ParamHeaveside(nn.Module):
@@ -287,8 +284,8 @@ class QuantGPT(nn.Module):
         return build_rope_cache(
             seq_len=self.config.block_size,
             n_elem=int(self.config.rotary_percentage * self.config.head_size),
-            #dtype=torch.bfloat16,
-            dtype=idx.dtype,
+            dtype=torch.bfloat16,
+            #dtype=idx.dtype,
             device=idx.device,
             condense_ratio=self.config.condense_ratio,
         )
@@ -677,20 +674,20 @@ class MyNorm(nn.Module):
 
     def __init__(self, size: int, dim: int = -1, eps: float = 1e-5) -> None:
         super().__init__()
-        self.weight = torch.nn.Parameter(torch.ones(size))
+        #self.weight = torch.nn.Parameter(torch.ones(size))
         self.eps = eps
         self.dim = dim
         self.size = size
             
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         # NOTE: the original RMSNorm paper implementation is not equivalent
-        norm_x = torch.mean(x * x, dim=self.dim, keepdim=True)
-        x_normed = x * torch.rsqrt(norm_x + self.eps)
+        #norm_x = torch.mean(x * x, dim=self.dim, keepdim=True)
+        #x_normed = x * torch.rsqrt(norm_x + self.eps)
         #x_normed = x
         #D = self.size
         #return self.weight * x_normed / (D ** 0.5)
-        return self.weight * x_normed
-        #return x
+        #return self.weight * x_normed
+        return x
 
     #def reset_parameters(self):
         #torch.nn.init.ones_(self.weight)
